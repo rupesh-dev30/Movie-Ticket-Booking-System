@@ -41,51 +41,56 @@ class BookSeatView(APIView):
         user = request.user
         show = get_object_or_404(Show, id=show_id)
 
-        # Validate seat number in range
-        if seat_number < 1 or seat_number > show.total_seats:
-            return Response({"detail": "seat_number outside valid range."}, status=status.HTTP_400_BAD_REQUEST)
+        # Validate seat number
+        if not isinstance(seat_number, int) or seat_number < 1 or seat_number > show.total_seats:
+            return Response({"detail": "seat_number must be integer within valid range."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Try to create booking in a transaction. Use DB constraint + retry loop to handle concurrency.
         max_retries = 5
         for attempt in range(max_retries):
             try:
                 with transaction.atomic():
-                    # Prevent overbooking: count currently active bookings for show
                     booked_count = Booking.objects.filter(show=show, status='booked').count()
                     if booked_count >= show.total_seats:
                         return Response({"detail": "Show is fully booked."}, status=status.HTTP_400_BAD_REQUEST)
 
-                    # Create booking object; unique_together prevents double seat booking
                     booking = Booking.objects.create(user=user, show=show, seat_number=seat_number, status='booked')
-                    out = BookingSerializer(booking).data
-                    return Response(out, status=status.HTTP_201_CREATED)
+                    return Response(BookingSerializer(booking).data, status=status.HTTP_201_CREATED)
+
             except IntegrityError as e:
-                # Happens if seat already booked (unique constraint) or race condition
-                # If seat was just taken -> inform user or retry small sleep and retry
-                if 'unique' in str(e).lower() or 'unique constraint' in str(e).lower():
+                if 'unique' in str(e).lower():
                     return Response({"detail": "Seat is already booked."}, status=status.HTTP_400_BAD_REQUEST)
-                # otherwise retry a few times
                 if attempt < max_retries - 1:
-                    time.sleep(0.1)  # short wait then retry
+                    time.sleep(0.1)
                     continue
                 return Response({"detail": "Could not complete booking. Try again."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            except Exception as e:
+                return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 # Cancel booking
 class CancelBookingView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def post(self, request, booking_id):
-        booking = get_object_or_404(Booking, id=booking_id)
-        # security: user can only cancel their own booking
-        if booking.user != request.user:
-            return Response({"detail": "Cannot cancel someone else's booking."}, status=status.HTTP_403_FORBIDDEN)
-        if booking.status == 'cancelled':
-            return Response({"detail": "Booking already cancelled."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            booking = get_object_or_404(Booking, id=booking_id)
 
-        with transaction.atomic():
-            booking.status = 'cancelled'
-            booking.save()
-        return Response({"detail": "Booking cancelled."}, status=status.HTTP_200_OK)
+            # Only owner can cancel
+            if booking.user != request.user:
+                return Response({"detail": "Cannot cancel someone else's booking."}, status=status.HTTP_403_FORBIDDEN)
+
+            if booking.status == 'cancelled':
+                return Response({"detail": "Booking already cancelled."}, status=status.HTTP_400_BAD_REQUEST)
+
+            with transaction.atomic():
+                booking.status = 'cancelled'
+                booking.save()
+
+            return Response({"detail": "Booking cancelled successfully."}, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 # List my bookings
 class MyBookingsView(generics.ListAPIView):
