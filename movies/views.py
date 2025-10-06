@@ -41,7 +41,6 @@ class BookSeatView(APIView):
         user = request.user
         show = get_object_or_404(Show, id=show_id)
 
-        # Validate seat number
         if not isinstance(seat_number, int) or seat_number < 1 or seat_number > show.total_seats:
             return Response({"detail": "seat_number must be integer within valid range."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -49,22 +48,28 @@ class BookSeatView(APIView):
         for attempt in range(max_retries):
             try:
                 with transaction.atomic():
+                    # Lock the show row
+                    show = Show.objects.select_for_update().get(id=show_id)
+
+                    # Check total booked seats
                     booked_count = Booking.objects.filter(show=show, status='booked').count()
                     if booked_count >= show.total_seats:
-                        return Response({"detail": "Show is fully booked."}, status=status.HTTP_400_BAD_REQUEST)
+                        return Response({"detail": "Show is fully booked."}, status=400)
 
+                    # Check if this seat is already booked (only booked seats)
+                    if Booking.objects.filter(show=show, seat_number=seat_number, status='booked').exists():
+                        return Response({"detail": "Seat is already booked."}, status=400)
+
+                    # Seat is free, create booking
                     booking = Booking.objects.create(user=user, show=show, seat_number=seat_number, status='booked')
-                    return Response(BookingSerializer(booking).data, status=status.HTTP_201_CREATED)
+                    return Response(BookingSerializer(booking).data, status=201)
 
-            except IntegrityError as e:
-                if 'unique' in str(e).lower():
-                    return Response({"detail": "Seat is already booked."}, status=status.HTTP_400_BAD_REQUEST)
+            except IntegrityError:
+                # Only retry if race condition happens, otherwise seat is free now
                 if attempt < max_retries - 1:
                     time.sleep(0.1)
                     continue
-                return Response({"detail": "Could not complete booking. Try again."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            except Exception as e:
-                return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                return Response({"detail": "Could not complete booking. Try again."}, status=500)
 
 
 # Cancel booking

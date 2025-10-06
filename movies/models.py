@@ -23,13 +23,19 @@ class Booking(models.Model):
         ('cancelled', 'Cancelled'),
     )
     user = models.ForeignKey(settings.AUTH_USER_MODEL, related_name='bookings', on_delete=models.CASCADE)
-    show = models.ForeignKey(Show, related_name='bookings', on_delete=models.CASCADE)
+    show = models.ForeignKey('Show', related_name='bookings', on_delete=models.CASCADE)
     seat_number = models.PositiveIntegerField()
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='booked')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ('show', 'seat_number')  # prevents double booking of same seat for a show
+        constraints = [
+            models.UniqueConstraint(
+                fields=['show', 'seat_number'],
+                condition=models.Q(status='booked'),
+                name='unique_booked_seat_per_show'
+            )
+        ]
         ordering = ['-created_at']
 
     def __str__(self):
