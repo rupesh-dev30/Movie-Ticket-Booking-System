@@ -76,3 +76,9 @@ python manage.py runserver
 http://127.0.0.1:8000/swagger/
 Use the Authorize button to provide JWT token for protected endpoints.
 ```
+
+### 9. Running Tests
+- To ensure booking logic works correctly:
+```bash
+python manage.py test
+```
